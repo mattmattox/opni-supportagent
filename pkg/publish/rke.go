@@ -3,8 +3,8 @@ package publish
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"reflect"
-	"time"
 
 	"github.com/dbason/opni-supportagent/pkg/input"
 	"github.com/dbason/opni-supportagent/pkg/util"
@@ -35,7 +35,6 @@ func ShipRKEControlPlane(
 		username:    username,
 		password:    password,
 	}
-	var start, end time.Time
 
 	for _, component := range []*input.OpensearchInput{
 		shipper.createETCDInput(),
@@ -47,31 +46,46 @@ func ShipRKEControlPlane(
 	} {
 		if !reflect.ValueOf(component).IsNil() && component != nil {
 			util.Log.Infof("publishing %s logs", component.ComponentName())
-			thisStart, thisEnd, err := component.Publish(&input.DefaultParser{})
+			var err error
+			if component.ComponentName() == "etcd" {
+				_, _, err = component.Publish(&input.DefaultParser{
+					TimestampRegex: input.EtcdRegex,
+				}, input.LogTypeControlplane)
+			} else {
+				_, _, err = component.Publish(&input.DefaultParser{
+					TimestampRegex: input.KlogRegex,
+				}, input.LogTypeControlplane)
+			}
 			if err != nil {
 				return err
 			}
-			if start.IsZero() || thisStart.Before(start) {
-				start = thisStart
-			}
-			if end.IsZero() || thisEnd.After(end) {
-				end = thisEnd
-			}
 		}
 	}
-	doc := SupportFetcherDoc{
-		Start: start,
-		End:   end,
-		Case:  clusterName,
+
+	parser := &input.MultipleParser{
+		Dateformats: []input.Dateformat{
+			{
+				DateRegex: input.RancherRegex,
+				Layout:    input.RancherLayout,
+			},
+			{
+				DateRegex: input.KlogRegex,
+				Layout:    input.KlogLayout,
+			},
+		},
+		StripLeadingDate: true,
 	}
 
-	return indexFetcherDoc(
-		ctx,
-		endpoint,
-		username,
-		password,
-		doc,
-	)
+	rancherInput := shipper.createRancherInput()
+	if !reflect.ValueOf(rancherInput).IsNil() && rancherInput != nil {
+		util.Log.Info("publishing rancher server logs")
+		_, _, err := rancherInput.Publish(parser, input.LogTypeRancher)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s rkeShipper) createETCDInput() *input.OpensearchInput {
@@ -180,4 +194,23 @@ func (s rkeShipper) createKubeProxyInput() *input.OpensearchInput {
 	}
 	util.Log.Info("kube-proxy log is missing, skipping")
 	return nil
+}
+
+func (s rkeShipper) createRancherInput() *input.OpensearchInput {
+	files, err := filepath.Glob("rancher/containerlogs/server-*")
+	if err != nil {
+		util.Log.Errorf("unable to list rancher files: %s", err)
+		return nil
+	}
+	os, err := input.NewOpensearchInput(s.ctx, s.endpoint, s.username, s.password, input.OpensearchConfig{
+		ClusterID: s.clusterName,
+		NodeName:  s.nodeName,
+		Component: "",
+		Paths:     files,
+	})
+	if err != nil {
+		util.Log.Errorf("unable to create rancher shipper: %s", err)
+		return nil
+	}
+	return os
 }

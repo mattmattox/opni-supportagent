@@ -1,0 +1,39 @@
+on:
+  release:
+    types: [created]
+
+name: Publish Release Artifact
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        persist-credentials: false
+    - uses: golangci/golangci-lint-action@v2
+      with:
+        version: v1.46
+  build:
+    name: Build
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin]
+        goarch: [amd64, arm64]
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        persist-credentials: false
+    - uses: wangyoucao577/go-release-action@v1.29
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        goos: ${{ matrix.goos }}
+        goarch: ${{ matrix.goarch }}
+        goversion: 1.17
+        pre_command: export GIT_TAG=$(git tag -l --contains HEAD | head -n 1)
+        ldflags: -w -s -X main.VERSION=$GIT_TAG -extldflags -static
+  

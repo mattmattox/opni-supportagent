@@ -3,10 +3,13 @@ package publish
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 
 	"github.com/dbason/opni-supportagent/pkg/input"
+	"github.com/dbason/opni-supportagent/pkg/util"
 )
 
 func ShipK3SControlPlane(
@@ -55,24 +58,45 @@ func ShipK3SControlPlane(
 		return err
 	}
 
-	journaldParser := input.NewDateZoneParser(timezone, year, input.DatetimeRegexJournalD, input.LayoutJournalD)
+	journaldParser := input.NewDateZoneParser(timezone, year, input.JournaldRegex, input.JournaldLayout)
 
-	start, end, err := opensearch.Publish(journaldParser)
+	_, _, err = opensearch.Publish(journaldParser, input.LogTypeControlplane)
 	if err != nil {
 		return err
 	}
 
-	doc := SupportFetcherDoc{
-		Start: start,
-		End:   end,
-		Case:  clusterName,
+	files, err := filepath.Glob("k3s/podlogs/cattle-system-rancher-*")
+	if err != nil {
+		util.Log.Errorf("unable to list rancher files: %s", err)
+		return nil
 	}
 
-	return indexFetcherDoc(
-		ctx,
-		endpoint,
-		username,
-		password,
-		doc,
-	)
+	parser := &input.MultipleParser{
+		Dateformats: []input.Dateformat{
+			{
+				DateRegex: input.RancherRegex,
+				Layout:    input.RancherLayout,
+			},
+			{
+				DateRegex:  input.KlogRegex,
+				Layout:     input.KlogLayout,
+				DateSuffix: fmt.Sprintf(" %s %s", timezone, year),
+			},
+		},
+	}
+
+	rancher, err := input.NewOpensearchInput(ctx, endpoint, username, password, input.OpensearchConfig{
+		ClusterID: clusterName,
+		NodeName:  nodeName,
+		Component: "",
+		Paths:     files,
+	})
+	if err != nil {
+		return err
+	}
+
+	util.Log.Info("publishing rancher server logs")
+	_, _, err = rancher.Publish(parser, input.LogTypeRancher)
+	return err
+
 }

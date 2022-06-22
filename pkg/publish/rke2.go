@@ -3,12 +3,14 @@ package publish
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"time"
 
 	"github.com/dbason/opni-supportagent/pkg/input"
+	"github.com/dbason/opni-supportagent/pkg/util"
 )
 
 type rke2Shipper struct {
@@ -58,10 +60,13 @@ func ShipRKE2ControlPlane(
 	}
 
 	shipper := rke2Shipper{
+		ctx:         ctx,
 		endpoint:    endpoint,
 		clusterName: clusterName,
 		timezone:    timezone,
 		year:        year,
+		username:    username,
+		password:    password,
 	}
 
 	err = shipper.shipEtcd()
@@ -74,7 +79,7 @@ func ShipRKE2ControlPlane(
 		return err
 	}
 
-	err = shipper.shipKubeApiServer()
+	err = shipper.shipKubeAPIServer()
 	if err != nil {
 		return err
 	}
@@ -99,23 +104,13 @@ func ShipRKE2ControlPlane(
 		return err
 	}
 
-	doc := SupportFetcherDoc{
-		Start: shipper.start,
-		End:   shipper.end,
-		Case:  clusterName,
-	}
+	err = shipper.shipRancher()
+	return err
 
-	return indexFetcherDoc(
-		ctx,
-		endpoint,
-		username,
-		password,
-		doc,
-	)
 }
 
 func (r *rke2Shipper) shipEtcd() error {
-	parser := input.RKE2EtcdParser{}
+	parser := &input.RKE2EtcdParser{}
 	files, err := filepath.Glob("rke2/podlogs/kube-system-etcd-*")
 	if err != nil {
 		return err
@@ -129,7 +124,7 @@ func (r *rke2Shipper) shipEtcd() error {
 	if err != nil {
 		return err
 	}
-	start, end, err := os.Publish(parser)
+	start, end, err := os.Publish(parser, input.LogTypeControlplane)
 	if err != nil {
 		return err
 	}
@@ -143,7 +138,7 @@ func (r *rke2Shipper) shipEtcd() error {
 }
 
 func (r *rke2Shipper) shipKubelet() error {
-	parser := input.NewDateZoneParser(r.timezone, r.year, input.DatetimeRegexK8s, input.LayoutK8s)
+	parser := input.NewDateZoneParser(r.timezone, r.year, input.KlogRegex, input.KlogLayout)
 	os, err := input.NewOpensearchInput(r.ctx, r.endpoint, r.username, r.password, input.OpensearchConfig{
 		ClusterID: r.clusterName,
 		NodeName:  r.nodeName,
@@ -153,7 +148,7 @@ func (r *rke2Shipper) shipKubelet() error {
 	if err != nil {
 		return err
 	}
-	start, end, err := os.Publish(parser)
+	start, end, err := os.Publish(parser, input.LogTypeControlplane)
 	if err != nil {
 		return err
 	}
@@ -166,8 +161,8 @@ func (r *rke2Shipper) shipKubelet() error {
 	return nil
 }
 
-func (r *rke2Shipper) shipKubeApiServer() error {
-	parser := input.NewDateZoneParser(r.timezone, r.year, input.DatetimeRegexK8s, input.LayoutK8s)
+func (r *rke2Shipper) shipKubeAPIServer() error {
+	parser := input.NewDateZoneParser(r.timezone, r.year, input.KlogRegex, input.KlogLayout)
 	files, err := filepath.Glob("rke2/podlogs/kube-system-kube-apiserver-*")
 	if err != nil {
 		return err
@@ -181,7 +176,7 @@ func (r *rke2Shipper) shipKubeApiServer() error {
 	if err != nil {
 		return err
 	}
-	start, end, err := os.Publish(parser)
+	start, end, err := os.Publish(parser, input.LogTypeControlplane)
 	if err != nil {
 		return err
 	}
@@ -195,7 +190,7 @@ func (r *rke2Shipper) shipKubeApiServer() error {
 }
 
 func (r *rke2Shipper) shipKubeControllerManager() error {
-	parser := input.NewDateZoneParser(r.timezone, r.year, input.DatetimeRegexK8s, input.LayoutK8s)
+	parser := input.NewDateZoneParser(r.timezone, r.year, input.KlogRegex, input.KlogLayout)
 	files, err := filepath.Glob("rke2/podlogs/kube-system-kube-controller-manager-*")
 	if err != nil {
 		return err
@@ -209,7 +204,7 @@ func (r *rke2Shipper) shipKubeControllerManager() error {
 	if err != nil {
 		return err
 	}
-	start, end, err := os.Publish(parser)
+	start, end, err := os.Publish(parser, input.LogTypeControlplane)
 	if err != nil {
 		return err
 	}
@@ -223,7 +218,7 @@ func (r *rke2Shipper) shipKubeControllerManager() error {
 }
 
 func (r *rke2Shipper) shipKubeScheduler() error {
-	parser := input.NewDateZoneParser(r.timezone, r.year, input.DatetimeRegexK8s, input.LayoutK8s)
+	parser := input.NewDateZoneParser(r.timezone, r.year, input.KlogRegex, input.KlogLayout)
 	files, err := filepath.Glob("rke2/podlogs/kube-system-kube-scheduler-*")
 	if err != nil {
 		return err
@@ -237,7 +232,7 @@ func (r *rke2Shipper) shipKubeScheduler() error {
 	if err != nil {
 		return err
 	}
-	start, end, err := os.Publish(parser)
+	start, end, err := os.Publish(parser, input.LogTypeControlplane)
 	if err != nil {
 		return err
 	}
@@ -251,7 +246,7 @@ func (r *rke2Shipper) shipKubeScheduler() error {
 }
 
 func (r *rke2Shipper) shipKubeProxy() error {
-	parser := input.NewDateZoneParser(r.timezone, r.year, input.DatetimeRegexK8s, input.LayoutK8s)
+	parser := input.NewDateZoneParser(r.timezone, r.year, input.KlogRegex, input.KlogLayout)
 	files, err := filepath.Glob("rke2/podlogs/kube-system-kube-proxy-*")
 	if err != nil {
 		return err
@@ -265,7 +260,7 @@ func (r *rke2Shipper) shipKubeProxy() error {
 	if err != nil {
 		return err
 	}
-	start, end, err := os.Publish(parser)
+	start, end, err := os.Publish(parser, input.LogTypeControlplane)
 	if err != nil {
 		return err
 	}
@@ -279,7 +274,7 @@ func (r *rke2Shipper) shipKubeProxy() error {
 }
 
 func (r *rke2Shipper) shipRKE2JournalD() error {
-	parser := input.NewDateZoneParser(r.timezone, r.year, input.DatetimeRegexJournalD, input.LayoutJournalD)
+	parser := input.NewDateZoneParser(r.timezone, r.year, input.JournaldRegex, input.JournaldLayout)
 	os, err := input.NewOpensearchInput(r.ctx, r.endpoint, r.username, r.password, input.OpensearchConfig{
 		ClusterID: r.clusterName,
 		NodeName:  r.nodeName,
@@ -289,7 +284,7 @@ func (r *rke2Shipper) shipRKE2JournalD() error {
 	if err != nil {
 		return err
 	}
-	start, end, err := os.Publish(parser)
+	start, end, err := os.Publish(parser, input.LogTypeControlplane)
 	if err != nil {
 		return err
 	}
@@ -300,4 +295,39 @@ func (r *rke2Shipper) shipRKE2JournalD() error {
 		r.end = end
 	}
 	return nil
+}
+
+func (r *rke2Shipper) shipRancher() error {
+	files, err := filepath.Glob("rke2/podlogs/cattle-system-rancher-*")
+	if err != nil {
+		util.Log.Errorf("unable to list rancher files: %s", err)
+		return err
+	}
+	parser := &input.MultipleParser{
+		Dateformats: []input.Dateformat{
+			{
+				DateRegex: input.RancherRegex,
+				Layout:    input.RancherLayout,
+			},
+			{
+				DateRegex:  input.KlogRegex,
+				Layout:     input.KlogLayout,
+				DateSuffix: fmt.Sprintf(" %s %s", r.timezone, r.year),
+			},
+		},
+	}
+
+	rancher, err := input.NewOpensearchInput(r.ctx, r.endpoint, r.username, r.password, input.OpensearchConfig{
+		ClusterID: r.clusterName,
+		NodeName:  r.nodeName,
+		Component: "",
+		Paths:     files,
+	})
+	if err != nil {
+		return err
+	}
+
+	util.Log.Info("publishing rancher server logs")
+	_, _, err = rancher.Publish(parser, input.LogTypeRancher)
+	return err
 }
